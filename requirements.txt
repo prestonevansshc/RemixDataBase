@@ -1,0 +1,4 @@
+numpy==2.4.3
+pymongo==4.16.0
+twilio==9.10.4
+python-dotenv==1.0.0

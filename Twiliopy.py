@@ -1,21 +1,35 @@
-import numpy
 from pymongo import MongoClient
 from twilio.rest import Client
+import time
+import os
+from urllib.parse import quote_plus
+from dotenv import load_dotenv
 
-client = MongoClient("mongodb://127.0.0.1:27017")
+# Load environment variables from .env file
+load_dotenv()
+
+# Get credentials from environment variables
+mongobd_uri = os.getenv("MONGODB_URI")
+account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+from_number = os.getenv("TWILIO_FROM_NUMBER")
+to_number = os.getenv("TWILIO_TO_NUMBER")
+
+# Validate that all required credentials are set
+if not all([mongobd_uri, account_sid, auth_token, from_number, to_number]):
+    raise ValueError("Missing required environment variables. Please check your .env file.")
+
+# Connect to MongoDB
+client = MongoClient(mongobd_uri)
 Twilio = client["TwilioDB"]
 Messages = Twilio["Messages"]
 
 Messages.insert_one({"message": "Hello, World!", "timestamp": "2023-10-01"})
 
-account_sid = ""
-auth_token = ""
-
+# Initialize Twilio client
 twilio_client = Client(account_sid, auth_token)
 
-from_number = ""
-
-numbers = []
+numbers = [to_number]
 
 for to_number in numbers:
     try:
@@ -41,11 +55,16 @@ for to_number in numbers:
         Messages.update_one(
                 {"sid": message.sid},
                 {"$set": {
-                    "status": msg.status,
-                    "date_updated": msg.date_updated,
-                    "error": getattr(msg, "error_message", None)
+                    "status": message.status,
+                    "date_updated": message.date_updated,
+                    "error": getattr(message, "error_message", None)
                 }}
         )
+        
+        # Check message status after a few seconds
+        time.sleep(2)
+        msg = twilio_client.messages(message.sid).fetch()
+        print(f"Updated Status: {msg.status}")
 
     except Exception as e:
         print("Send error:", e)
@@ -60,9 +79,3 @@ for to_number in numbers:
                 "date_updated": None,
                 "error": str(e)
             })
-    
-    # Check message status after a few seconds
-    import time
-    time.sleep(2)
-    msg = twilio_client.messages(message.sid).fetch()
-    print(f"Updated Status: {msg.status}")
