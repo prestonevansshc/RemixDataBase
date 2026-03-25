@@ -1,7 +1,6 @@
 from pymongo import MongoClient
 import os
-import json
-from datetime import datetime
+import csv
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -21,28 +20,42 @@ try:
     # Get all messages from the database
     messages = list(Messages.find())
     
-    print("=" * 80)
-    print("DATABASE CONTENTS - TwilioDB.Messages")
-    print("=" * 80)
-    print(f"Total Messages: {len(messages)}\n")
+    csv_file = 'messages.csv'
+    existing_sids = set()
     
-    if messages:
-        for i, msg in enumerate(messages, 1):
-            print(f"Message #{i}:")
-            print(f"  SID: {msg.get('sid', 'N/A')}")
-            print(f"  Body: {msg.get('body', 'N/A')}")
-            print(f"  From: {msg.get('from_', 'N/A')}")
-            print(f"  To: {msg.get('to', 'N/A')}")
-            print(f"  Status: {msg.get('status', 'N/A')}")
-            print(f"  Date Created: {msg.get('date_created', 'N/A')}")
-            print(f"  Date Sent: {msg.get('date_sent', 'N/A')}")
-            print(f"  Date Updated: {msg.get('date_updated', 'N/A')}")
-            print(f"  Error: {msg.get('error', 'None')}")
-            print("-" * 80)
-    else:
-        print("No messages found in the database.")
+    if os.path.exists(csv_file):
+        with open(csv_file, 'r', newline='') as f:
+            reader = csv.reader(f)
+            next(reader, None)  # skip header
+            for row in reader:
+                if row:
+                    existing_sids.add(row[0])
     
-    print(f"\nLast checked: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    new_messages_count = 0
+    with open(csv_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if not existing_sids:  # if file didn't exist, write header
+            writer.writerow(['SID', 'Body', 'From', 'To', 'Status', 'Date Created', 'Date Sent', 'Date Updated', 'Error'])
+        for msg in messages:
+            sid = msg.get('sid', 'N/A')
+            if sid not in existing_sids:
+                row = [
+                    sid,
+                    msg.get('body', 'N/A'),
+                    msg.get('from_', 'N/A'),
+                    msg.get('to', 'N/A'),
+                    msg.get('status', 'N/A'),
+                    str(msg.get('date_created', 'N/A')),
+                    str(msg.get('date_sent', 'N/A')),
+                    str(msg.get('date_updated', 'N/A')),
+                    msg.get('error', 'None')
+                ]
+                writer.writerow(row)
+                existing_sids.add(sid)
+                new_messages_count += 1
+    
+    print(f"CSV file '{csv_file}' updated with {new_messages_count} new messages.")
+    print(f"Total messages in database: {len(messages)}")
     
 except Exception as e:
     print(f"Error connecting to database: {e}")
