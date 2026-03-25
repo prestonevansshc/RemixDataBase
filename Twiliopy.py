@@ -13,20 +13,53 @@ auth_token = ""
 
 twilio_client = Client(account_sid, auth_token)
 
-from_number = "+18447913654"
+from_number = ""
 
-numbers = [
-    "+12283433254"
-]
+numbers = []
 
 for to_number in numbers:
-    message = twilio_client.messages.create(
-        body="Test message from Twilio",
-        from_=from_number,
-        to=to_number
-    )
-    print(f"Message SID: {message.sid}")
-    print(f"Status: {message.status}")
+    try:
+        message = twilio_client.messages.create(
+            body="Test message from Twilio",
+            from_=from_number,
+            to=to_number
+        )
+        print(f"Message SID: {message.sid}")
+        print(f"Status: {message.status}")
+        message_data = {
+                "sid": message.sid,
+                "body": message.body,
+                "from_": message.from_,
+                "to": message.to,
+                "status": message.status,
+                "date_created": message.date_created,
+                "date_sent": message.date_sent,
+                "date_updated": message.date_updated,
+                "error": None
+            }
+        Messages.insert_one(message_data)
+        Messages.update_one(
+                {"sid": message.sid},
+                {"$set": {
+                    "status": msg.status,
+                    "date_updated": msg.date_updated,
+                    "error": getattr(msg, "error_message", None)
+                }}
+        )
+
+    except Exception as e:
+        print("Send error:", e)
+        Messages.insert_one({
+                "sid": None,
+                "body": "Test message from Twilio",
+                "from_": from_number,
+                "to": to_number,
+                "status": "send_failed",
+                "date_created": None,
+                "date_sent": None,
+                "date_updated": None,
+                "error": str(e)
+            })
     
     # Check message status after a few seconds
     import time
