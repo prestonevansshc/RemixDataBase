@@ -25,6 +25,7 @@ client = MongoClient(mongobd_uri)
 Twilio = client["TwilioDB"]
 Messages = Twilio["Messages"]
 PhoneLookups = Twilio["PhoneLookups"]
+Polls = Twilio["Polls"]
 
 Messages.insert_one({"message": "Hello, World!", "timestamp": "2023-10-01"})
 
@@ -131,6 +132,193 @@ def send_message(to_number, from_number, body="Test message from Twilio"):
             }
         Messages.insert_one(error_data)
         return None
+
+def create_poll(question, options):
+    """Create a new poll in the database.
+    
+    Args:
+        question (str): The poll question
+        options (list): List of voting options (e.g., ['Yes', 'No', 'Maybe'])
+    
+    Returns:
+        str: The poll ID for reference
+    """
+    import uuid
+    poll_id = str(uuid.uuid4())
+    
+    poll_data = {
+        "_id": poll_id,
+        "question": question,
+        "options": options,
+        "votes": {option: [] for option in options},  # {option: [phone_numbers]}
+        "vote_count": {option: 0 for option in options},
+        "created_at": time.time(),
+        "status": "active"
+    }
+    
+    Polls.insert_one(poll_data)
+    print(f"Poll created with ID: {poll_id}")
+    print(f"Question: {question}")
+    print(f"Options: {', '.join(options)}")
+    
+    return poll_id
+
+def send_poll(poll_id, phone_numbers, from_number=None):
+    """Send a poll to multiple phone numbers.
+    
+    Args:
+        poll_id (str): The ID of the poll to send
+        phone_numbers (list): List of phone numbers to send the poll to
+        from_number (str): The Twilio phone number to send from (uses env default if not provided)
+    
+    Returns:
+        dict: Summary of sent messages with success/failure count
+    """
+    if from_number is None:
+        from_number = globals()['from_number']
+    
+    # Retrieve poll data
+    poll = Polls.find_one({"_id": poll_id})
+    if not poll:
+        print(f"Poll {poll_id} not found")
+        return {"success": 0, "failed": 0, "errors": []}
+    
+    # Format poll message
+    question = poll["question"]
+    options = poll["options"]
+    options_text = "\n".join([f"{i+1}. {option}" for i, option in enumerate(options)])
+    
+    message_body = f"{question}\n\n{options_text}\n\nReply with the number of your choice (1-{len(options)})"
+    
+    success_count = 0
+    failed_count = 0
+    errors = []
+    
+    for phone_number in phone_numbers:
+        try:
+            message = twilio_client.messages.create(
+                body=message_body,
+                from_=from_number,
+                to=phone_number
+            )
+            
+            # Store poll message in database
+            poll_message_data = {
+                "poll_id": poll_id,
+                "recipient": phone_number,
+                "message_sid": message.sid,
+                "status": "sent",
+                "sent_at": time.time(),
+                "vote": None
+            }
+            Polls.update_one(
+                {"_id": poll_id},
+                {"$push": {"messages": poll_message_data}}
+            )
+            
+            success_count += 1
+            print(f"Poll sent to {phone_number} (SID: {message.sid})")
+            
+        except Exception as e:
+            failed_count += 1
+            error_msg = f"Failed to send poll to {phone_number}: {str(e)}"
+            errors.append(error_msg)
+            print(error_msg)
+    
+    summary = {
+        "poll_id": poll_id,
+        "success": success_count,
+        "failed": failed_count,
+        "errors": errors
+    }
+    
+    return summary
+
+def record_vote(poll_id, phone_number, vote):
+    """Record a vote for a poll.
+    
+    Args:
+        poll_id (str): The ID of the poll
+        phone_number (str): The phone number of the voter
+        vote (str or int): The vote choice (either option name or option number 1-indexed)
+    
+    Returns:
+        dict: Vote result with success status and message
+    """
+    poll = Polls.find_one({"_id": poll_id})
+    if not poll:
+        return {"success": False, "message": f"Poll {poll_id} not found"}
+    
+    if poll["status"] != "active":
+        return {"success": False, "message": f"Poll is no longer active"}
+    
+    options = poll["options"]
+    
+    # Handle numeric vote (1-indexed)
+    if isinstance(vote, (int, str)) and str(vote).isdigit():
+        vote_index = int(vote) - 1
+        if 0 <= vote_index < len(options):
+            selected_option = options[vote_index]
+        else:
+            return {"success": False, "message": f"Invalid vote. Please choose 1-{len(options)}"}
+    else:
+        # Handle string vote (option name)
+        if vote in options:
+            selected_option = vote
+        else:
+            return {"success": False, "message": f"Invalid vote. Please choose from: {', '.join(options)}"}
+    
+    # Check if user already voted
+    if phone_number in poll["votes"].get(selected_option, []):
+        return {"success": False, "message": "You have already voted in this poll"}
+    
+    # Record the vote
+    Polls.update_one(
+        {"_id": poll_id},
+        {
+            "$push": {f"votes.{selected_option}": phone_number},
+            "$inc": {f"vote_count.{selected_option}": 1}
+        }
+    )
+    
+    return {"success": True, "message": f"Your vote for '{selected_option}' has been recorded"}
+
+def get_poll_results(poll_id):
+    """Get the results of a poll.
+    
+    Args:
+        poll_id (str): The ID of the poll
+    
+    Returns:
+        dict: Poll data with results, or None if poll not found
+    """
+    poll = Polls.find_one({"_id": poll_id})
+    if not poll:
+        return None
+    
+    # Calculate total votes
+    total_votes = sum(poll["vote_count"].values())
+    
+    # Calculate percentages
+    results = {
+        "poll_id": poll_id,
+        "question": poll["question"],
+        "status": poll["status"],
+        "created_at": poll["created_at"],
+        "total_votes": total_votes,
+        "votes_by_option": {}
+    }
+    
+    for option in poll["options"]:
+        vote_count = poll["vote_count"].get(option, 0)
+        percentage = (vote_count / total_votes * 100) if total_votes > 0 else 0
+        results["votes_by_option"][option] = {
+            "count": vote_count,
+            "percentage": round(percentage, 2),
+            "voters": poll["votes"].get(option, [])
+        }
+    
+    return results
 
 def main():
     """Main function to lookup phone number and send message"""
